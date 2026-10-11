@@ -358,13 +358,21 @@ void loop() {
   int32_t rawT = ((uint32_t)d[3] << 12) | ((uint32_t)d[4] << 4) | (d[5] >> 4);
   float bt = bmpCompensateT(rawT);
   float p = bmpCompensateP(rawP) / 100.0f;
+  // Отсчёт миллисекунд берётся сразу после чтения регистров, то есть в момент,
+  // когда датчики уже закончили измерение. Метка времени на стороне
+  // компьютера отстаёт на десятки миллисекунд из-за буферизации порта, а
+  // millis() отражает фактический момент. Счётчик переполняется через
+  // 2^32 мс, то есть примерно через 49,7 суток непрерывной работы.
+  unsigned long stamp = millis();
   Serial.print(ahtTemp, 2);
   Serial.print(',');
   Serial.print(bt, 2);
   Serial.print(',');
   Serial.print(ahtHum, 2);
   Serial.print(',');
-  Serial.println(p, 2);
+  Serial.print(p, 2);
+  Serial.print(',');
+  Serial.println(stamp);
 
   if (oled_ok) {
     char v1[16], v2[16], v3[16], v4[16];
