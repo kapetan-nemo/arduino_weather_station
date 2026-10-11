@@ -7,6 +7,10 @@ temperature_*.csv
 # Служебные каталоги агента
 .opencode/
 
+# Кэш байт-кода Python
+__pycache__/
+*.pyc
+
 # Артефакты сборки arduino-cli
 stackchk*/
 *.elf

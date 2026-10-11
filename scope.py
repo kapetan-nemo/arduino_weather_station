@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import serial
 
+from arduino_port import available, describe, find_port
+
 GREEN = "#00ff41"
 GRID = (0, 1.0, 0.1, 0.22)
 GRID_CENTER = (0, 1.0, 0.1, 0.5)
@@ -55,12 +57,27 @@ class Scope:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("port", nargs="?", default="/dev/cu.usbserial-A5069RR4")
+    parser.add_argument("port", nargs="?", default=None,
+                        help="порт, например /dev/cu.usbserial-A5069RR4; "
+                             "без него ищется автоматически")
     parser.add_argument("--baud", type=int, default=1000000)
     args = parser.parse_args()
 
-    ser = serial.Serial(args.port, args.baud, timeout=2)
+    port = args.port or find_port()
+    if not port:
+        print("Порты не найдены.")
+        for dev, desc, is_best in available():
+            print(f"  {dev}  {desc}{' <- будет выбран' if is_best else ''}")
+        sys.exit(1)
+
+    try:
+        ser = serial.Serial(port, args.baud, timeout=2)
+    except (OSError, serial.SerialException) as e:
+        print(f"Не открывается порт {describe(port)}")
+        print(f"Причина: {e}")
+        sys.exit(1)
     ser.reset_input_buffer()
+    print(f"Порт {describe(port)}, {args.baud} бод")
 
     samples_per_div = 90
     window = samples_per_div * X_DIVS

@@ -1,41 +1,68 @@
 #!/usr/bin/env python3
-import serial
+"""Запись показаний метеостанции в CSV.
+
+Запуск:
+    python log.py                      порт ищется автоматически
+    python log.py /dev/cu.usbserial-X   порт указывается явно
+
+Останавливается по Ctrl+C. Имя файла и время в CSV — местные, с указанием
+часового пояса, чтобы записи разных дней сравнивались между собой.
+"""
 import csv
 import sys
-import os
-from datetime import datetime, timezone
+from datetime import datetime
+
+import serial
+
+from arduino_port import available, describe, find_port
 
 BAUD = 115200
 
+# В строке от Arduino пять полей: четыре показания и отсчёт миллисекунд.
+# Отсчёт снимается в момент окончания измерения, метка времени компьютера
+# ставится при чтении из порта и отстаёт на десятки миллисекунд из-за
+# буферизации. Для точных интервалов используйте колонку uptime_ms.
+HEADER = ["timestamp", "uptime_ms", "temp_aht20_c", "temp_bmp280_c",
+          "humidity_pct", "pressure_hpa"]
 
-def find_port():
-    for p in [
-        "/dev/tty.usbserial-*",
-        "/dev/tty.wchusbserial*",
-        "/dev/tty.usbmodem*",
-    ]:
-        import glob
-        matches = glob.glob(p)
-        if matches:
-            return matches[0]
-    return None
+
+def now_stamp():
+    """Местное время с часовым поясом: 2026-10-10T14:34:02.123+03:00."""
+    return datetime.now().astimezone().isoformat(timespec="milliseconds")
+
+
+def show_ports(hint):
+    print("Порты не найдены.")
+    rows = available()
+    if rows:
+        for dev, desc, is_best in rows:
+            mark = " ← будет выбран" if is_best else ""
+            print(f"  {dev}  {desc}{mark}")
+    print(f"\nУкажи порт явно: {hint} /dev/cu.usbserial-XXXX")
 
 
 def main():
     port = sys.argv[1] if len(sys.argv) > 1 else find_port()
     if not port:
-        print("Cannot find Arduino port. Pass it as arg: python log.py /dev/tty.usbserial-1420")
+        show_ports("python log.py")
         sys.exit(1)
 
-    filename = f"temperature_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    print(f"Opening {port}, writing to {filename}")
+    try:
+        ser = serial.Serial(port, BAUD, timeout=2)
+    except (OSError, serial.SerialException) as e:
+        print(f"Не открывается порт {describe(port)}")
+        print(f"Причина: {e}")
+        show_ports("python log.py")
+        sys.exit(1)
 
-    ser = serial.Serial(port, BAUD, timeout=2)
     ser.reset_input_buffer()
+    filename = f"temperature_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    print(f"Порт {describe(port)}")
+    print(f"Запись в {filename}, остановка по Ctrl+C")
 
     with open(filename, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["timestamp", "temp_aht20_c", "temp_bmp280_c", "humidity_pct", "pressure_hpa"])
+        writer.writerow(HEADER)
         f.flush()
 
         count = 0
@@ -48,20 +75,22 @@ def main():
                 continue
 
             parts = line.split(",")
-            if len(parts) != 4:
+            if len(parts) != 5:
                 continue
 
-            temp_aht, temp_bmp, hum, pres = parts
-            ts = datetime.now(timezone.utc).isoformat()
-            writer.writerow([ts, temp_aht, temp_bmp, hum, pres])
+            temp_aht, temp_bmp, hum, pres, uptime = parts
+            writer.writerow([now_stamp(), uptime, temp_aht, temp_bmp, hum, pres])
             f.flush()
             count += 1
-            if count % 10 == 0:
-                print(f"[{count}] {temp_aht}°C (bmp: {temp_bmp}°C)  {hum}%RH  {pres} hPa")
+            if count % 50 == 0:
+                print(f"[{count}] {temp_aht}°C (bmp: {temp_bmp}°C)  "
+                      f"{hum}%RH  {pres} hPa  t={uptime} мс")
+
+    ser.close()
 
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\nStopped.")
+        print("\nОстановлено.")

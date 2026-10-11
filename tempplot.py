@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """Реалтайм-график 60 fps: слева температура (AHT20+BMP280), справа давление.
-Ховер: ближайшая линия → значение, время, источник. CSV пишется параллельно (1 Гц)."""
-import argparse
+Ховер: ближайшая линия → значение, время, источник. CSV пишется параллельно (1 Гц).
+
+Запуск:
+    python tempplot.py                      порт ищется автоматически
+    python tempplot.py /dev/cu.usbserial-X   порт указывается явно
+"""
 import collections
 import csv
-import glob
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import serial
+
+from arduino_port import available, describe, find_port
 
 BAUD = 115200
 DATA_HZ = 5
@@ -21,26 +26,45 @@ LIVE_HZ = 60
 
 SOURCES = [("AHT20", 1, "left"), ("BMP280", 2, "left"), ("Давление", 4, "right")]
 
+HEADER = ["timestamp", "uptime_ms", "temp_aht20_c", "temp_bmp280_c",
+          "humidity_pct", "pressure_hpa"]
 
-def find_port():
-    for pat in ("/dev/tty.usbserial-*", "/dev/tty.wchusbserial*", "/dev/tty.usbmodem*"):
-        m = glob.glob(pat)
-        if m:
-            return m[0]
-    return None
+
+def now_stamp():
+    """Местное время с часовым поясом, то же, что в log.py."""
+    return datetime.now().astimezone().isoformat(timespec="milliseconds")
+
+
+def show_ports(hint):
+    print("Порты не найдены.")
+    rows = available()
+    if rows:
+        for dev, desc, is_best in rows:
+            mark = " <- будет выбран" if is_best else ""
+            print(f"  {dev}  {desc}{mark}")
+    print(f"\nУкажи порт явно: {hint} /dev/cu.usbserial-XXXX")
 
 
 def main():
     port = sys.argv[1] if len(sys.argv) > 1 else find_port()
     if not port:
-        print("Port not found")
+        show_ports("python tempplot.py")
+        sys.exit(1)
+
+    try:
+        serial.Serial(port, BAUD, timeout=0.05).reset_input_buffer()
+    except (OSError, serial.SerialException) as e:
+        print(f"Не открывается порт {describe(port)}")
+        print(f"Причина: {e}")
+        show_ports("python tempplot.py")
         sys.exit(1)
 
     filename = f"temperature_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    print(f"Logging to {filename}")
+    print(f"Порт {describe(port)}")
+    print(f"График и запись в {filename}, остановка по Ctrl+C")
     csv_file = open(filename, "w", newline="")
     writer = csv.writer(csv_file)
-    writer.writerow(["timestamp", "temp_aht20_c", "temp_bmp280_c", "humidity_pct", "pressure_hpa"])
+    writer.writerow(HEADER)
     csv_file.flush()
     csv_count = 0
 
@@ -121,17 +145,19 @@ def main():
                 raw = b""
             for line in raw.decode("utf-8", "replace").replace("\r", "").split("\n"):
                 parts = line.strip().split(",")
-                if len(parts) != 4:
+                if len(parts) != 5:
                     continue
                 try:
-                    t_a, t_b, h, p = float(parts[0]), float(parts[1]), float(parts[2]), float(parts[3])
+                    t_a = float(parts[0]); t_b = float(parts[1])
+                    h = float(parts[2]); p = float(parts[3])
+                    uptime = int(parts[4])
                 except ValueError:
                     continue
                 samples.append((time.time(), t_a, t_b, h, p))
                 csv_count += 1
                 last_sample = time.time()
                 if csv_count % CSV_EVERY == 0:
-                    writer.writerow([datetime.now(timezone.utc).isoformat(), t_a, t_b, h, p])
+                    writer.writerow([now_stamp(), uptime, t_a, t_b, h, p])
             csv_file.flush()
             if now - last_sample > 3.0 and now - last_attempt > 1.0:
                 reconnect()
